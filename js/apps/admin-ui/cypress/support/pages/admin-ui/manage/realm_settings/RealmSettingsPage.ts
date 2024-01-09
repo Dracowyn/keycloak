@@ -238,7 +238,17 @@ export default class RealmSettingsPage extends CommonPage {
   #port = "#kc-port";
 
   #publicKeyBtn = ".kc-keys-list > tbody > tr > td > .button-wrapper > button";
+  #localizationLocalesSubTab = "rs-localization-locales-tab";
+  #localizationRealmOverridesSubTab = "rs-localization-realm-overrides-tab";
+  #localizationEffectiveMessageBundlesSubTab =
+    "rs-localization-effective-message-bundles-tab";
   #realmSettingsEventsTab = new RealmSettingsEventsTab();
+  #realmId = 'input[aria-label="Copyable input"]';
+  #securityDefensesHeadersSaveBtn = "headers-form-tab-save";
+  #securityDefensesBruteForceSaveBtn = "brute-force-tab-save";
+  #securityDefensesHeadersTab = "security-defenses-headers-tab";
+  #securityDefensesBruteForceTab = "security-defenses-brute-force-tab";
+  #clientProfileLink = 'table[aria-label="Profiles"] tbody a';
 
   #realmName?: string;
   constructor(realmName?: string) {
@@ -311,6 +321,10 @@ export default class RealmSettingsPage extends CommonPage {
 
   fillDisplayName(displayName: string) {
     cy.get(this.#realmDisplayName).clear().type(displayName);
+  }
+
+  clearRealmId() {
+    cy.get(this.#realmId).clear();
   }
 
   fillFromDisplayName(displayName: string) {
@@ -446,7 +460,7 @@ export default class RealmSettingsPage extends CommonPage {
     cy.findByTestId(this.keyInput).type(key);
     cy.findByTestId(this.valueInput).type(value);
 
-    cy.findByTestId(this.confirmAddBundle).click();
+    cy.findByTestId(this.confirmAddBundle).click({ force: true });
 
     return this;
   }
@@ -1043,6 +1057,11 @@ export default class RealmSettingsPage extends CommonPage {
     return this;
   }
 
+  searchNonExistingClientProfile(name: string) {
+    new ListingPage().searchItem(name, false);
+    return this;
+  }
+
   shouldNotHaveConditionsConfigured() {
     cy.get(this.#clientPolicy).click();
     cy.get('h2[class*="kc-emptyConditions"]').should(
@@ -1245,8 +1264,41 @@ export default class RealmSettingsPage extends CommonPage {
     return this;
   }
 
+  goToLocalizationLocalesSubTab() {
+    cy.findByTestId(this.#localizationLocalesSubTab).click();
+    return this;
+  }
+
+  goToLocalizationRealmOverridesSubTab() {
+    cy.findByTestId(this.#localizationRealmOverridesSubTab).click();
+    return this;
+  }
+
+  goToLocalizationEffectiveMessageBundlesSubTab() {
+    cy.findByTestId(this.#localizationEffectiveMessageBundlesSubTab).click();
+    return this;
+  }
+
   goToSecurityDefensesTab() {
     cy.findByTestId(this.securityDefensesTab).click();
+    return this;
+  }
+
+  saveSecurityDefensesHeaders() {
+    cy.findByTestId(this.#securityDefensesHeadersSaveBtn).click();
+  }
+
+  saveSecurityDefensesBruteForce() {
+    cy.findByTestId(this.#securityDefensesBruteForceSaveBtn).click();
+  }
+
+  goToSecurityDefensesHeadersTab() {
+    cy.findByTestId(this.#securityDefensesHeadersTab).click();
+    return this;
+  }
+
+  goToSecurityDefensesBruteForceTab() {
+    cy.findByTestId(this.#securityDefensesBruteForceTab).click();
     return this;
   }
 
@@ -1257,6 +1309,11 @@ export default class RealmSettingsPage extends CommonPage {
 
   goToTokensTab() {
     cy.findByTestId(this.tokensTab).click();
+    return this;
+  }
+
+  goToClientProfileByNameLink(profileName: string) {
+    cy.get(this.#clientProfileLink).contains(profileName).click();
     return this;
   }
 }

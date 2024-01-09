@@ -155,8 +155,8 @@ export const GroupPickerDialog = ({
               type === "selectMany"
                 ? selectedRows
                 : navigation.length
-                ? [currentGroup()]
-                : undefined,
+                  ? [currentGroup()]
+                  : undefined,
             );
           }}
           isDisabled={type === "selectMany" && selectedRows.length === 0}
@@ -239,8 +239,7 @@ export const GroupPickerDialog = ({
                   canBrowse={canBrowse}
                 />
                 {isSearching &&
-                  group.subGroups?.length !== 0 &&
-                  group.subGroups!.map((g) => (
+                  group.subGroups?.map((g) => (
                     <GroupRow
                       key={g.id}
                       group={g}

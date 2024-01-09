@@ -34,23 +34,21 @@ import { cloneDeep, isEqual, uniqWith } from "lodash-es";
 import { useEffect, useMemo, useState } from "react";
 import { Controller, useForm, useWatch } from "react-hook-form";
 import { useTranslation } from "react-i18next";
-import { HelpItem } from "ui-shared";
-
+import { FormPanel, HelpItem } from "ui-shared";
 import { adminClient } from "../admin-client";
 import { useAlerts } from "../components/alert/Alerts";
 import { FormAccess } from "../components/form/FormAccess";
 import type { KeyValueType } from "../components/key-value-form/key-value-convert";
 import { ListEmptyState } from "../components/list-empty-state/ListEmptyState";
-import { FormPanel } from "../components/scroll-form/FormPanel";
 import { PaginatingTableToolbar } from "../components/table-toolbar/PaginatingTableToolbar";
 import { useRealm } from "../context/realm-context/RealmContext";
 import { useServerInfo } from "../context/server-info/ServerInfoProvider";
 import { useWhoAmI } from "../context/whoami/WhoAmI";
 import { DEFAULT_LOCALE } from "../i18n/i18n";
-import { convertToFormValues } from "../util";
+import { convertToFormValues, localeToDisplayName } from "../util";
 import { useFetch } from "../utils/useFetch";
-import { AddMessageBundleModal } from "./AddMessageBundleModal";
 import useLocaleSort, { mapByKey } from "../utils/useLocaleSort";
+import { AddMessageBundleModal } from "./AddMessageBundleModal";
 
 type LocalizationTabProps = {
   save: (realm: RealmRepresentation) => void;
@@ -74,14 +72,6 @@ export type BundleForm = {
   key: string;
   value: string;
   messageBundle: KeyValueType;
-};
-
-const localeToDisplayName = (locale: string) => {
-  try {
-    return new Intl.DisplayNames([locale], { type: "language" }).of(locale);
-  } catch (error) {
-    return locale;
-  }
 };
 
 export const LocalizationTab = ({ save, realm }: LocalizationTabProps) => {
@@ -310,14 +300,14 @@ export const LocalizationTab = ({ save, realm }: LocalizationTabProps) => {
   const options = [
     <SelectGroup label={t("defaultLocale")} key="group1">
       <SelectOption key={DEFAULT_LOCALE} value={DEFAULT_LOCALE}>
-        {localeToDisplayName(DEFAULT_LOCALE)}
+        {localeToDisplayName(DEFAULT_LOCALE, whoAmI.getLocale())}
       </SelectOption>
     </SelectGroup>,
     <Divider key="divider" />,
     <SelectGroup label={t("supportedLocales")} key="group2">
       {watchSupportedLocales.map((locale) => (
         <SelectOption key={locale} value={locale}>
-          {localeToDisplayName(locale)}
+          {localeToDisplayName(locale, whoAmI.getLocale())}
         </SelectOption>
       ))}
     </SelectGroup>,
@@ -452,7 +442,7 @@ export const LocalizationTab = ({ save, realm }: LocalizationTabProps) => {
                           key={locale}
                           value={locale}
                         >
-                          {localeToDisplayName(locale)}
+                          {localeToDisplayName(locale, whoAmI.getLocale())}
                         </SelectOption>
                       ))}
                     </Select>
@@ -477,12 +467,13 @@ export const LocalizationTab = ({ save, realm }: LocalizationTabProps) => {
                       }}
                       selections={
                         field.value
-                          ? localeToDisplayName(field.value)
+                          ? localeToDisplayName(field.value, whoAmI.getLocale())
                           : realm.defaultLocale !== ""
-                          ? localeToDisplayName(
-                              realm.defaultLocale || DEFAULT_LOCALE,
-                            )
-                          : t("placeholderText")
+                            ? localeToDisplayName(
+                                realm.defaultLocale || DEFAULT_LOCALE,
+                                whoAmI.getLocale(),
+                              )
+                            : t("placeholderText")
                       }
                       variant={SelectVariant.single}
                       aria-label={t("defaultLocale")}
@@ -495,7 +486,7 @@ export const LocalizationTab = ({ save, realm }: LocalizationTabProps) => {
                           key={`default-locale-${idx}`}
                           value={locale}
                         >
-                          {localeToDisplayName(locale)}
+                          {localeToDisplayName(locale, whoAmI.getLocale())}
                         </SelectOption>
                       ))}
                     </Select>
@@ -567,10 +558,16 @@ export const LocalizationTab = ({ save, realm }: LocalizationTabProps) => {
                     }}
                     selections={
                       selectMenuValueSelected
-                        ? localeToDisplayName(selectMenuLocale)
+                        ? localeToDisplayName(
+                            selectMenuLocale,
+                            whoAmI.getLocale(),
+                          )
                         : realm.defaultLocale !== ""
-                        ? localeToDisplayName(DEFAULT_LOCALE)
-                        : t("placeholderText")
+                          ? localeToDisplayName(
+                              DEFAULT_LOCALE,
+                              whoAmI.getLocale(),
+                            )
+                          : t("placeholderText")
                     }
                   >
                     {options}

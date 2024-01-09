@@ -146,6 +146,12 @@ function Keycloak (config) {
                 kc.enableLogging = false;
             }
 
+            if (initOptions.logoutMethod === 'POST') {
+                kc.logoutMethod = 'POST';
+            } else {
+                kc.logoutMethod = 'GET';
+            }
+
             if (typeof initOptions.scope === 'string') {
                 kc.scope = initOptions.scope;
             }
@@ -201,7 +207,7 @@ function Keycloak (config) {
                 var ifrm = document.createElement("iframe");
                 var src = kc.createLoginUrl({prompt: 'none', redirectUri: kc.silentCheckSsoRedirectUri});
                 ifrm.setAttribute("src", src);
-                ifrm.setAttribute("sandbox", "allow-scripts allow-same-origin");
+                ifrm.setAttribute("sandbox", "allow-storage-access-by-user-activation allow-scripts allow-same-origin");
                 ifrm.setAttribute("title", "keycloak-silent-check-sso");
                 ifrm.style.display = "none";
                 document.body.appendChild(ifrm);
@@ -487,6 +493,12 @@ function Keycloak (config) {
     }
 
     kc.createLogoutUrl = function(options) {
+
+        const logoutMethod = options?.logoutMethod ?? kc.logoutMethod;
+        if (logoutMethod === 'POST') {
+            return kc.endpoints.logout();
+        }
+
         var url = kc.endpoints.logout()
             + '?client_id=' + encodeURIComponent(kc.clientId)
             + '&post_logout_redirect_uri=' + encodeURIComponent(adapter.redirectUri(options, false));
@@ -1197,7 +1209,7 @@ function Keycloak (config) {
 
         var src = kc.endpoints.checkSessionIframe();
         iframe.setAttribute('src', src );
-        iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
+        iframe.setAttribute('sandbox', 'allow-storage-access-by-user-activation allow-scripts allow-same-origin');
         iframe.setAttribute('title', 'keycloak-session-iframe' );
         iframe.style.display = 'none';
         document.body.appendChild(iframe);
@@ -1270,7 +1282,7 @@ function Keycloak (config) {
         if (loginIframe.enable || kc.silentCheckSsoRedirectUri) {
             var iframe = document.createElement('iframe');
             iframe.setAttribute('src', kc.endpoints.thirdPartyCookiesIframe());
-            iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
+            iframe.setAttribute('sandbox', 'allow-storage-access-by-user-activation allow-scripts allow-same-origin');
             iframe.setAttribute('title', 'keycloak-3p-check-iframe' );
             iframe.style.display = 'none';
             document.body.appendChild(iframe);
@@ -1317,9 +1329,38 @@ function Keycloak (config) {
                     return createPromise().promise;
                 },
 
-                logout: function(options) {
-                    window.location.replace(kc.createLogoutUrl(options));
-                    return createPromise().promise;
+                logout: async function(options) {
+
+                    const logoutMethod = options?.logoutMethod ?? kc.logoutMethod;
+                    if (logoutMethod === "GET") {
+                        window.location.replace(kc.createLogoutUrl(options));
+                        return;
+                    }
+
+                    const logoutUrl = kc.createLogoutUrl(options);
+                    const response = await fetch(logoutUrl, {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/x-www-form-urlencoded"
+                        },
+                        body: new URLSearchParams({
+                            id_token_hint: kc.idToken,
+                            client_id: kc.clientId,
+                            post_logout_redirect_uri: adapter.redirectUri(options, false)
+                        })
+                    });
+
+                    if (response.redirected) {
+                        window.location.href = response.url;
+                        return;
+                    }
+
+                    if (response.ok) {
+                        window.location.reload();
+                        return;
+                    }
+
+                    throw new Error("Logout failed, request returned an error code.");
                 },
 
                 register: function(options) {
@@ -1391,7 +1432,9 @@ function Keycloak (config) {
                 return formatCordovaOptions(cordovaOptions);
             };
 
-            var cordovaRedirectUri = kc.redirectUri || 'http://localhost';
+            var getCordovaRedirectUri = function() {
+                return kc.redirectUri || 'http://localhost';
+            }
             
             return {
                 login: function(options) {
@@ -1409,7 +1452,7 @@ function Keycloak (config) {
                     };
 
                     ref.addEventListener('loadstart', function(event) {
-                        if (event.url.indexOf(cordovaRedirectUri) == 0) {
+                        if (event.url.indexOf(getCordovaRedirectUri()) == 0) {
                             var callback = parseCallback(event.url);
                             processCallback(callback, promise);
                             closeBrowser();
@@ -1419,7 +1462,7 @@ function Keycloak (config) {
 
                     ref.addEventListener('loaderror', function(event) {
                         if (!completed) {
-                            if (event.url.indexOf(cordovaRedirectUri) == 0) {
+                            if (event.url.indexOf(getCordovaRedirectUri()) == 0) {
                                 var callback = parseCallback(event.url);
                                 processCallback(callback, promise);
                                 closeBrowser();
@@ -1451,13 +1494,13 @@ function Keycloak (config) {
                     var error;
 
                     ref.addEventListener('loadstart', function(event) {
-                        if (event.url.indexOf(cordovaRedirectUri) == 0) {
+                        if (event.url.indexOf(getCordovaRedirectUri()) == 0) {
                             ref.close();
                         }
                     });
 
                     ref.addEventListener('loaderror', function(event) {
-                        if (event.url.indexOf(cordovaRedirectUri) == 0) {
+                        if (event.url.indexOf(getCordovaRedirectUri()) == 0) {
                             ref.close();
                         } else {
                             error = true;
@@ -1483,7 +1526,7 @@ function Keycloak (config) {
                     var cordovaOptions = createCordovaOptions(options);
                     var ref = cordovaOpenWindowWrapper(registerUrl, '_blank', cordovaOptions);
                     ref.addEventListener('loadstart', function(event) {
-                        if (event.url.indexOf(cordovaRedirectUri) == 0) {
+                        if (event.url.indexOf(getCordovaRedirectUri()) == 0) {
                             ref.close();
                             var oauth = parseCallback(event.url);
                             processCallback(oauth, promise);
@@ -1497,7 +1540,7 @@ function Keycloak (config) {
                     if (typeof accountUrl !== 'undefined') {
                         var ref = cordovaOpenWindowWrapper(accountUrl, '_blank', 'location=no');
                         ref.addEventListener('loadstart', function(event) {
-                            if (event.url.indexOf(cordovaRedirectUri) == 0) {
+                            if (event.url.indexOf(getCordovaRedirectUri()) == 0) {
                                 ref.close();
                             }
                         });
@@ -1507,7 +1550,7 @@ function Keycloak (config) {
                 },
 
                 redirectUri: function(options) {
-                    return cordovaRedirectUri;
+                    return getCordovaRedirectUri();
                 }
             }
         }

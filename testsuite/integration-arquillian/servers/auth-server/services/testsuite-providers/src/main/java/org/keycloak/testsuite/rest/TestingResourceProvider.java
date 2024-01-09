@@ -17,11 +17,16 @@
 
 package org.keycloak.testsuite.rest;
 
-import org.infinispan.client.hotrod.RemoteCache;
-import org.jboss.resteasy.annotations.cache.NoCache;
+import static java.util.Objects.requireNonNull;
+
+import jakarta.ws.rs.core.CacheControl;
+import org.jboss.resteasy.reactive.NoCache;
 import org.keycloak.http.HttpRequest;
 import org.keycloak.Config;
 import org.keycloak.common.Profile;
+import org.keycloak.common.Profile.Feature;
+import org.keycloak.common.enums.HostnameVerificationPolicy;
+import org.keycloak.common.profile.PropertiesProfileConfigResolver;
 import org.keycloak.common.util.HtmlUtils;
 import org.keycloak.common.util.Time;
 import org.keycloak.component.ComponentModel;
@@ -46,11 +51,6 @@ import org.keycloak.models.UserCredentialModel;
 import org.keycloak.models.UserModel;
 import org.keycloak.models.UserProvider;
 import org.keycloak.models.UserSessionModel;
-import org.keycloak.models.UserSessionSpi;
-import org.keycloak.models.map.common.AbstractMapProviderFactory;
-import org.keycloak.models.map.storage.hotRod.connections.DefaultHotRodConnectionProviderFactory;
-import org.keycloak.models.map.storage.hotRod.connections.HotRodConnectionProvider;
-import org.keycloak.models.map.userSession.MapUserSessionProviderFactory;
 import org.keycloak.models.sessions.infinispan.changes.sessions.CrossDCLastSessionRefreshStoreFactory;
 import org.keycloak.models.utils.ModelToRepresentation;
 import org.keycloak.models.utils.ResetTimeOffsetEvent;
@@ -92,7 +92,6 @@ import org.keycloak.testsuite.util.FeatureDeployerUtil;
 import org.keycloak.timer.TimerProvider;
 import org.keycloak.truststore.FileTruststoreProvider;
 import org.keycloak.truststore.FileTruststoreProviderFactory;
-import org.keycloak.truststore.HostnameVerificationPolicy;
 import org.keycloak.truststore.TruststoreProvider;
 import org.keycloak.util.JsonSerialization;
 import org.keycloak.utils.MediaType;
@@ -113,13 +112,12 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
-import java.nio.file.Files;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Date;
 import java.util.HashMap;
@@ -256,18 +254,6 @@ public class TestingResourceProvider implements RealmResourceProvider {
     @Produces(MediaType.APPLICATION_JSON)
     public Map<String, String> setTimeOffset(Map<String, String> time) {
         int offset = Integer.parseInt(time.get("offset"));
-
-        // move time on Hot Rod server if present
-        // determine usage of Infinispan based on user sessions config
-        String userSessionProvider = Config.scope(UserSessionSpi.NAME, MapUserSessionProviderFactory.PROVIDER_ID, AbstractMapProviderFactory.CONFIG_STORAGE).get("provider");
-        if (Profile.isFeatureEnabled(Profile.Feature.MAP_STORAGE) && "hotrod".equals(userSessionProvider)) {
-            RemoteCache<Object, Object> scriptCache = session.getProvider(HotRodConnectionProvider.class).getRemoteCache(DefaultHotRodConnectionProviderFactory.SCRIPT_CACHE);
-            if (scriptCache != null) {
-                Map<String, Object> param = new HashMap<>();
-                param.put("timeService", offset);
-                scriptCache.execute("InfinispanTimeServiceTask", param);
-            }
-        }
 
         Time.setOffset(offset);
 
@@ -886,13 +872,13 @@ public class TestingResourceProvider implements RealmResourceProvider {
 
     private void setFeatureInProfileFile(File file, Profile.Feature featureProfile, String newState) {
         doWithProperties(file, props -> {
-            props.setProperty("feature." + featureProfile.toString().toLowerCase(), newState);
+            props.setProperty(PropertiesProfileConfigResolver.getPropertyKey(featureProfile), newState);
         });
     }
 
     private void unsetFeatureInProfileFile(File file, Profile.Feature featureProfile) {
         doWithProperties(file, props -> {
-            props.remove("feature." + featureProfile.toString().toLowerCase());
+            props.remove(PropertiesProfileConfigResolver.getPropertyKey(featureProfile));
         });
     }
 
@@ -968,36 +954,48 @@ public class TestingResourceProvider implements RealmResourceProvider {
     }
 
     private Set<Profile.Feature> updateFeature(String featureKey, boolean shouldEnable) {
-        Profile.Feature feature;
+        Collection<Profile.Feature> features = null;
 
         try {
-            feature = Profile.Feature.valueOf(featureKey);
+            features = Arrays.asList(Profile.Feature.valueOf(featureKey));
         } catch (IllegalArgumentException e) {
+            Set<Feature> featureVersions = Profile.getFeatureVersions(featureKey);
+            if (!shouldEnable) {
+                features = featureVersions;
+            } else if (!featureVersions.isEmpty()) {
+                // the set is ordered by preferred feature
+                features = Arrays.asList(featureVersions.iterator().next());
+            }
+        }
+
+        if (features == null || features.isEmpty()) {
             System.err.printf("Feature '%s' doesn't exist!!\n", featureKey);
             throw new BadRequestException();
         }
 
-        if (Profile.getInstance().getFeatures().get(feature) != shouldEnable) {
-            FeatureDeployerUtil.initBeforeChangeFeature(feature);
+        for (Feature feature : features) {
+            if (Profile.getInstance().getFeatures().get(feature) != shouldEnable) {
+                FeatureDeployerUtil.initBeforeChangeFeature(feature);
 
-            String jbossServerConfigDir = System.getProperty("jboss.server.config.dir");
-            // If we are in jboss-based container, we need to write profile.properties file, otherwise the change in system property will disappear after restart
-            if (jbossServerConfigDir != null) {
-                setFeatureInProfileFile(new File(jbossServerConfigDir, "profile.properties"), feature, shouldEnable ? "enabled" : "disabled");
-            }
+                String jbossServerConfigDir = System.getProperty("jboss.server.config.dir");
+                // If we are in jboss-based container, we need to write profile.properties file, otherwise the change in system property will disappear after restart
+                if (jbossServerConfigDir != null) {
+                    setFeatureInProfileFile(new File(jbossServerConfigDir, "profile.properties"), feature, shouldEnable ? "enabled" : "disabled");
+                }
 
-            Profile current = Profile.getInstance();
+                Profile current = Profile.getInstance();
 
-            Map<Profile.Feature, Boolean> updatedFeatures = new HashMap<>();
-            updatedFeatures.putAll(current.getFeatures());
-            updatedFeatures.put(feature, shouldEnable);
+                Map<Profile.Feature, Boolean> updatedFeatures = new HashMap<>();
+                updatedFeatures.putAll(current.getFeatures());
+                updatedFeatures.put(feature, shouldEnable);
 
-            Profile.init(current.getName(), updatedFeatures);
+                Profile.init(current.getName(), updatedFeatures);
 
-            if (shouldEnable) {
-                FeatureDeployerUtil.deployFactoriesAfterFeatureEnabled(feature);
-            } else {
-                FeatureDeployerUtil.undeployFactoriesAfterFeatureDisabled(feature);
+                if (shouldEnable) {
+                    FeatureDeployerUtil.deployFactoriesAfterFeatureEnabled(feature);
+                } else {
+                    FeatureDeployerUtil.undeployFactoriesAfterFeatureDisabled(feature);
+                }
             }
         }
 
@@ -1165,5 +1163,23 @@ public class TestingResourceProvider implements RealmResourceProvider {
         return rootAuthSession.getAuthenticationSessions().size();
     }
 
+    @GET
+    @Path("/no-cache-annotated-endpoint")
+    @Produces(MediaType.APPLICATION_JSON)
+    @NoCache
+    public Response getNoCacheAnnotatedEndpointResponse(@QueryParam("programmatic_max_age_value") Integer programmaticMaxAgeValue) {
+        requireNonNull(programmaticMaxAgeValue);
 
+        CacheControl cacheControl = new CacheControl();
+        cacheControl.setMaxAge(programmaticMaxAgeValue);
+
+        return Response.noContent().cacheControl(cacheControl).build();
+    }
+
+    @GET
+    @Path("/blank")
+    @Produces(MediaType.TEXT_HTML_UTF_8)
+    public Response getBlankPage() {
+        return Response.ok("<html><body></body></html>").build();
+    }
 }

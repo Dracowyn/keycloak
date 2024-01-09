@@ -1,4 +1,4 @@
-import type { UserProfileGroup } from "@keycloak/keycloak-admin-client/lib/defs/userProfileConfig";
+import type { UserProfileGroup } from "@keycloak/keycloak-admin-client/lib/defs/userProfileMetadata";
 import {
   ActionGroup,
   Button,
@@ -166,7 +166,7 @@ export default function AttributesGroupForm() {
           </TextContent>
           <FormGroup label={t("annotationsText")} fieldId="kc-annotations">
             <FormProvider {...form}>
-              <KeyValueInput name="annotations" />
+              <KeyValueInput label={t("annotationsText")} name="annotations" />
             </FormProvider>
           </FormGroup>
           <ActionGroup>

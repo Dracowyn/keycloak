@@ -39,9 +39,9 @@ import org.keycloak.representations.idm.RealmRepresentation;
 import org.keycloak.representations.idm.UserRepresentation;
 import org.keycloak.testsuite.arquillian.annotation.EnableFeature;
 import org.keycloak.testsuite.forms.VerifyProfileTest;
-import org.keycloak.userprofile.config.UPAttribute;
-import org.keycloak.userprofile.config.UPAttributePermissions;
-import org.keycloak.userprofile.config.UPConfig;
+import org.keycloak.representations.userprofile.config.UPAttribute;
+import org.keycloak.representations.userprofile.config.UPAttributePermissions;
+import org.keycloak.representations.userprofile.config.UPConfig;
 import org.keycloak.util.JsonSerialization;
 
 @EnableFeature(Feature.DECLARATIVE_USER_PROFILE)
@@ -51,20 +51,21 @@ public class UserTestWithUserProfile extends UserTest {
     public void onBefore() throws IOException {
         RealmRepresentation realmRep = realm.toRepresentation();
         VerifyProfileTest.disableDynamicUserProfile(realm);
-        assertAdminEvents.poll();
-        realm.update(realmRep);
-        assertAdminEvents.poll();
+        assertAdminEvents.poll(); // update realm
+        assertAdminEvents.poll(); // set UP configuration
         VerifyProfileTest.enableDynamicUserProfile(realmRep);
         realm.update(realmRep);
         assertAdminEvents.poll();
         VerifyProfileTest.setUserProfileConfiguration(realm, null);
-        UPConfig upConfig = JsonSerialization.readValue(realm.users().userProfile().getConfiguration(), UPConfig.class);
+        assertAdminEvents.poll();
+        UPConfig upConfig = realm.users().userProfile().getConfiguration();
 
         for (String name : managedAttributes) {
-            upConfig.addAttribute(createAttributeMetadata(name));
+            upConfig.addOrReplaceAttribute(createAttributeMetadata(name));
         }
 
         VerifyProfileTest.setUserProfileConfiguration(realm, JsonSerialization.writeValueAsString(upConfig));
+        assertAdminEvents.poll();
     }
 
     @Test
@@ -134,7 +135,7 @@ public class UserTestWithUserProfile extends UserTest {
             } catch (WebApplicationException bre) {
                 assertEquals(400, bre.getResponse().getStatus());
                 ErrorRepresentation error = bre.getResponse().readEntity(ErrorRepresentation.class);
-                assertEquals("username contains invalid character.", error.getErrorMessage());
+                assertEquals("error-username-invalid-character", error.getErrorMessage());
             }
         }
     }

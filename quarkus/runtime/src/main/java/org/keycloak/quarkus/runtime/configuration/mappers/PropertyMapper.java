@@ -26,14 +26,21 @@ import static org.keycloak.quarkus.runtime.configuration.Configuration.toEnvVarF
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 
 import io.smallrye.config.ConfigSourceInterceptorContext;
 import io.smallrye.config.ConfigValue;
 
+import org.jboss.logging.Logger;
+import org.keycloak.config.DeprecatedMetadata;
 import org.keycloak.config.Option;
 import org.keycloak.config.OptionBuilder;
 import org.keycloak.config.OptionCategory;
+import org.keycloak.quarkus.runtime.cli.PropertyException;
+import org.keycloak.quarkus.runtime.cli.PropertyMapperParameterConsumer;
+import org.keycloak.quarkus.runtime.configuration.ConfigArgsConfigSource;
+import org.keycloak.quarkus.runtime.Environment;
 import org.keycloak.quarkus.runtime.configuration.MicroProfileConfigProvider;
 
 public class PropertyMapper<T> {
@@ -44,7 +51,8 @@ public class PropertyMapper<T> {
             null,
             null,
             null,
-            false) {
+            false,
+            null) {
         @Override
         public ConfigValue getConfigValue(String name, ConfigSourceInterceptorContext context) {
             return context.proceed(name);
@@ -59,9 +67,12 @@ public class PropertyMapper<T> {
     private final String paramLabel;
     private final String envVarFormat;
     private String cliFormat;
+    private BiConsumer<PropertyMapper<T>, ConfigValue> validator;
+
+    private static final Logger logger = Logger.getLogger(PropertyMapper.class);
 
     PropertyMapper(Option<T> option, String to, BiFunction<Optional<String>, ConfigSourceInterceptorContext, Optional<String>> mapper,
-                   String mapFrom, String paramLabel, boolean mask) {
+                   String mapFrom, String paramLabel, boolean mask, BiConsumer<PropertyMapper<T>, ConfigValue> validator) {
         this.option = option;
         this.to = to == null ? getFrom() : to;
         this.mapper = mapper == null ? PropertyMapper::defaultTransformer : mapper;
@@ -70,6 +81,7 @@ public class PropertyMapper<T> {
         this.mask = mask;
         this.cliFormat = toCliFormat(option.getKey());
         this.envVarFormat = toEnvVarFormat(getFrom());
+        this.validator = validator;
     }
 
     private static Optional<String> defaultTransformer(Optional<String> value, ConfigSourceInterceptorContext context) {
@@ -88,7 +100,7 @@ public class PropertyMapper<T> {
             from = name.replace(to.substring(0, to.lastIndexOf('.')), from.substring(0, from.lastIndexOf(OPTION_PART_SEPARATOR_CHAR)));
         }
 
-        if (isRebuild() && isRunTime() && name.startsWith(MicroProfileConfigProvider.NS_KEYCLOAK_PREFIX)) {
+        if ((isRebuild() || Environment.isRebuildCheck()) && isRunTime()) {
             // during re-aug do not resolve the server runtime properties and avoid they included by quarkus in the default value config source
             return ConfigValue.builder().withName(name).build();
         }
@@ -111,10 +123,10 @@ public class PropertyMapper<T> {
                     }
                 }
 
-                return transformValue(ofNullable(parentValue == null ? null : parentValue.getValue()), context);
+                return transformValue(name, ofNullable(parentValue == null ? null : parentValue.getValue()), context, null);
             }
 
-            ConfigValue defaultValue = transformValue(this.option.getDefaultValue().map(Objects::toString), context);
+            ConfigValue defaultValue = transformValue(name, this.option.getDefaultValue().map(Objects::toString), context, null);
 
             if (defaultValue != null) {
                 return defaultValue;
@@ -124,19 +136,13 @@ public class PropertyMapper<T> {
             ConfigValue current = context.proceed(name);
 
             if (current != null) {
-                return transformValue(ofNullable(current.getValue()), context);
+                return transformValue(name, ofNullable(current.getValue()), context, current.getConfigSourceName());
             }
 
             return current;
         }
 
-        Optional<String> configValue = ofNullable(config.getValue());
-
-        if (config.getName().equals(name)) {
-            return config;
-        }
-
-        ConfigValue transformedValue = transformValue(configValue, context);
+        ConfigValue transformedValue = transformValue(name, ofNullable(config.getValue()), context, config.getConfigSourceName());
 
         // we always fallback to the current value from the property we are mapping
         if (transformedValue == null) {
@@ -196,13 +202,18 @@ public class PropertyMapper<T> {
         return mask;
     }
 
-    private ConfigValue transformValue(Optional<String> value, ConfigSourceInterceptorContext context) {
+    public Optional<DeprecatedMetadata> getDeprecatedMetadata() {
+        return option.getDeprecatedMetadata();
+    }
+
+    private ConfigValue transformValue(String name, Optional<String> value, ConfigSourceInterceptorContext context, String configSourceName) {
         if (value == null) {
             return null;
         }
 
-        if (mapper == null) {
-            return ConfigValue.builder().withName(to).withValue(value.orElse(null)).build();
+        if (mapper == null || (mapFrom == null && name.equals(getFrom()))) {
+            // no mapper set or requesting a property that does not depend on other property, just return the value from the config source
+            return ConfigValue.builder().withName(name).withValue(value.orElse(null)).withConfigSourceName(configSourceName).build();
         }
 
         Optional<String> mappedValue = mapper.apply(value, context);
@@ -211,7 +222,8 @@ public class PropertyMapper<T> {
             return null;
         }
 
-        return ConfigValue.builder().withName(to).withValue(mappedValue.get()).withRawValue(value.orElse(null)).build();
+        return ConfigValue.builder().withName(name).withValue(mappedValue.get()).withRawValue(value.orElse(null))
+                .withConfigSourceName(configSourceName).build();
     }
 
     private ConfigValue convertValue(ConfigValue configValue) {
@@ -230,6 +242,7 @@ public class PropertyMapper<T> {
         private String mapFrom = null;
         private boolean isMasked = false;
         private String paramLabel;
+        private BiConsumer<PropertyMapper<T>, ConfigValue> validator = (mapper, value) -> mapper.validateExpectedValues(value);
 
         public Builder(Option<T> option) {
             this.option = option;
@@ -260,16 +273,38 @@ public class PropertyMapper<T> {
             return this;
         }
 
+        public Builder<T> validator(BiConsumer<PropertyMapper<T>, ConfigValue> validator) {
+            this.validator = validator;
+            return this;
+        }
+
         public PropertyMapper<T> build() {
             if (paramLabel == null && Boolean.class.equals(option.getType())) {
                 paramLabel = Boolean.TRUE + "|" + Boolean.FALSE;
             }
-            return new PropertyMapper<T>(option, to, mapper, mapFrom, paramLabel, isMasked);
+            return new PropertyMapper<T>(option, to, mapper, mapFrom, paramLabel, isMasked, validator);
         }
     }
 
     public static <T> PropertyMapper.Builder<T> fromOption(Option<T> opt) {
         return new PropertyMapper.Builder<>(opt);
+    }
+
+    public void validate(ConfigValue value) {
+        if (validator != null) {
+            validator.accept(this, value);
+        }
+    }
+
+    public void validateExpectedValues(ConfigValue value) {
+        if (PropertyMapperParameterConsumer.isExpectedValue(getExpectedValues(), value.getValue())) {
+            return;
+        }
+        boolean cli = Optional.ofNullable(value.getConfigSourceName()).filter(name -> name.contains(ConfigArgsConfigSource.NAME)).isPresent();
+        throw new PropertyException(
+                PropertyMapperParameterConsumer.getErrorMessage(cli ? this.getCliFormat() : getFrom(),
+                        value.getValue(), getExpectedValues(), getExpectedValues())
+                        + (cli ? "" : ". From ConfigSource " + value.getConfigSourceName()));
     }
 
 }

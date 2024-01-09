@@ -72,10 +72,8 @@ public class RedirectUtils {
             if (validRedirect.startsWith("/")) {
                 validRedirect = relativeToAbsoluteURI(session, rootUrl, validRedirect);
                 logger.debugv("replacing relative valid redirect with: {0}", validRedirect);
-                resolveValidRedirects.add(validRedirect);
-            } else {
-                resolveValidRedirects.add(validRedirect);
             }
+            resolveValidRedirects.add(validRedirect);
         }
         return resolveValidRedirects;
     }
@@ -148,7 +146,11 @@ public class RedirectUtils {
                 valid = matchesRedirects(resolveValidRedirects, redirectUri, false);
             }
 
-            if (valid != null && redirectUri.startsWith("/")) {
+            if (valid != null && !originalRedirect.isAbsolute()) {
+                // return absolute if the original URI is relative
+                if (!redirectUri.startsWith("/")) {
+                    redirectUri = "/" + redirectUri;
+                }
                 redirectUri = relativeToAbsoluteURI(session, rootUrl, redirectUri);
             }
 
@@ -174,7 +176,7 @@ public class RedirectUtils {
     private static URI toUri(String redirectUri) {
         URI uri = null;
         if (redirectUri != null) {
-        try {
+            try {
                 uri = URI.create(redirectUri);
             } catch (IllegalArgumentException cause) {
                 logger.debug("Invalid redirect uri", cause);
@@ -189,12 +191,11 @@ public class RedirectUtils {
         String redirectUri = null;
         if (uri != null) {
             redirectUri = uri.normalize().toString();
-            redirectUri = lowerCaseHostname(redirectUri);
         }
         return redirectUri;
     }
 
-    // Decode redirectUri. We don't decode query and fragment as those can be encoded in the original URL.
+    // Decode redirectUri. Only path is decoded as other elements can be encoded in the original URL or cannot be encoded at all.
     // URL can be decoded multiple times (in case it was encoded multiple times, or some of it's parts were encoded multiple times)
     private static String decodeRedirectUri(String redirectUri) {
         if (redirectUri == null) return null;
@@ -202,25 +203,20 @@ public class RedirectUtils {
 
         try {
             KeycloakUriBuilder uriBuilder = KeycloakUriBuilder.fromUri(redirectUri, false).preserveDefaultPort();
-            String origQuery = uriBuilder.getQuery();
-            String origFragment = uriBuilder.getFragment();
-            String encodedRedirectUri = uriBuilder
-                    .replaceQuery(null)
-                    .fragment(null)
-                    .buildAsString();
-            String decodedRedirectUri = null;
+            if (uriBuilder.getPath() == null) {
+                return redirectUri;
+            }
+            String encodedPath = uriBuilder.getPath();
+            String decodedPath;
 
             for (int i = 0; i < MAX_DECODING_COUNT; i++) {
-                decodedRedirectUri = Encode.decode(encodedRedirectUri);
-                if (decodedRedirectUri.equals(encodedRedirectUri)) {
-                    // URL is decoded. We can return it (after attach original query and fragment)
-                    return KeycloakUriBuilder.fromUri(decodedRedirectUri, false).preserveDefaultPort()
-                            .replaceQuery(origQuery)
-                            .fragment(origFragment)
-                            .buildAsString();
+                decodedPath = Encode.decode(encodedPath);
+                if (decodedPath.equals(encodedPath)) {
+                    // URL path is decoded. We can return it in the original redirect URI
+                    return uriBuilder.replacePath(decodedPath, false).buildAsString();
                 } else {
                     // Next attempt
-                    encodedRedirectUri = decodedRedirectUri;
+                    encodedPath = decodedPath;
                 }
             }
         } catch (IllegalArgumentException iae) {
@@ -228,15 +224,6 @@ public class RedirectUtils {
         }
         logger.debugf("Was not able to decode redirect URI: %s", redirectUri);
         return null;
-    }
-
-    private static String lowerCaseHostname(String redirectUri) {
-        int n = redirectUri.indexOf('/', 7);
-        if (n == -1) {
-            return redirectUri.toLowerCase();
-        } else {
-            return redirectUri.substring(0, n).toLowerCase() + redirectUri.substring(n);
-        }
     }
 
     private static String relativeToAbsoluteURI(KeycloakSession session, String rootUrl, String relative) {
@@ -253,13 +240,24 @@ public class RedirectUtils {
         return sb.toString();
     }
 
+    // removes the queryString, fragment and userInfo from the redirect
+    // to avoid comparing this when wildcards are used
+    private static String stripOffRedirectForWildcard(String redirect) {
+        return KeycloakUriBuilder.fromUri(redirect, false)
+                .preserveDefaultPort()
+                .userInfo(null)
+                .replaceQuery(null)
+                .fragment(null)
+                .buildAsString();
+    }
+
     // return the String that matched the redirect or null if not matched
     private static String matchesRedirects(Set<String> validRedirects, String redirect, boolean allowWildcards) {
         logger.tracef("matchesRedirects: redirect URL to check: %s, allow wildcards: %b, Configured valid redirect URLs: %s", redirect, allowWildcards, validRedirects);
         for (String validRedirect : validRedirects) {
             if (validRedirect.endsWith("*") && !validRedirect.contains("?") && allowWildcards) {
-                // strip off the query component - we don't check them when wildcards are effective
-                String r = redirect.contains("?") ? redirect.substring(0, redirect.indexOf("?")) : redirect;
+                // strip off the userInfo, query or fragment components - we don't check them when wildcards are effective
+                String r = stripOffRedirectForWildcard(redirect);
                 // strip off *
                 int length = validRedirect.length() - 1;
                 validRedirect = validRedirect.substring(0, length);
